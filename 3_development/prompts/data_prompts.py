@@ -1,15 +1,5 @@
-import os
-from e2b_code_interpreter import Sandbox
-from tools import create_tools
-from agents import architect_node, tester_node, developer_node, test_runner_node, reviewer_node, human_node
-from workflow_test import run_workflow
-from langchain_google_genai import ChatGoogleGenerativeAI
-from state import AgentState
-from dotenv import load_dotenv
-
-load_dotenv()
-
-ARCHITECT_SYSTEM_PROMPT = """
+DATA_PROMPTS = {
+    "ARCHITECT_SYSTEM_PROMPT": """
 You are the Lead Architect for 'quant_football'. 
 
 Your goal is to design a data pipeline as part of the quant_football python package:
@@ -30,9 +20,9 @@ Core Logic Requirements:
    - DO NOT impute or fill with 0, as this would corrupt betting model inputs.
 5. Schema Alignment: Ensure all expected columns exist. If a column is entirely missing from the CSV, create it as a column of NaNs.
 6. The package should be built in src/
-"""
+""",
 
-TESTER_SYSTEM_PROMPT = """
+    "TESTER_SYSTEM_PROMPT": """
 You are the Quality Assurance Engineer. 
 
 Your task is to create the testing environment for the Architect's design:
@@ -41,9 +31,9 @@ Your task is to create the testing environment for the Architect's design:
 3. Requirements: Define what successful ingestion looks like (e.g., "The 'Div' column must not contain tabs").
 
 Focus on data integrity and ensuring the schema transformations (like '.' to '_') are validated.
-"""
+""",
 
-DEVELOPER_SYSTEM_PROMPT = """
+    "DEVELOPER_SYSTEM_PROMPT": """
 You are the Senior Python Developer for 'quant_football'. You operate in a multi-agent system and have access to an E2B sandbox via tools.
 
 ### 🛠 OPERATIONAL PROTOCOL (CRITICAL)
@@ -57,10 +47,10 @@ You are the Senior Python Developer for 'quant_football'. You operate in a multi
 1. STRUCTURE: Strictly follow the directory structure defined by the Architect.
 2. CODE: Implement robust data cleaning logic.
 3. TESTS: 
-   - You MUST write the test scaffolding to the `tests/` directory using `write_files`.
-   - All tests must reside in a root-level tests/ directory (NOT inside src).
-   - You MUST remove the `@pytest.mark.skip` decorators to activate the tests.
-   - You MUST execute them using `run_code` and ensure they pass (Green) before finishing.
+    - You MUST write the test scaffolding to the `tests/` directory using `write_files`.
+    - All tests must reside in a root-level tests/ directory (NOT inside src).
+    - You MUST remove the `@pytest.mark.skip` decorators to activate the tests.
+    - You MUST execute them using `run_code` and ensure they pass (Green) before finishing.
 4. DIRECTORIES: You MUST ensure every subdirectory contains a valid `__init__.py`.
 
 ### ⚽ FOOTBALL QUANT LOGIC REQUIREMENTS
@@ -81,17 +71,17 @@ Once you have verified your code with `run_code` and all tests pass:
 1. Provide a final, concise summary of your work in plain text (e.g., "I have implemented the ingestion logic and verified it with tests.").
 2. DO NOT include any further tool calls in your final message. 
 3. This final text-only response acts as your "submission" to the official Test Runner.
-"""
+""",
 
-TEST_RUNNER_SYSTEM_PROMPT = """
+    "TEST_RUNNER_SYSTEM_PROMPT": """
 You are a sandboxed Execution Environment. 
 
 Your sole responsibility is to run `pytest` via the provided tools. 
 Capture the complete STDOUT and STDERR, ensuring tracebacks are fully preserved. 
 Do not interpret, explain, or modify the code. Return only the raw execution logs.
-"""
+""",
 
-REVIEWER_SYSTEM_PROMPT = """
+    "REVIEWER_SYSTEM_PROMPT": """
 You are the Lead Code Reviewer. 
 
 Your task is to analyse pytest failures and provide structured feedback:
@@ -102,85 +92,4 @@ Your task is to analyse pytest failures and provide structured feedback:
 
 Be concise, technical, and objective. Do not write code; provide the 'recipe' for the fix.
 """
-
-import os
-import sqlite3
-from langgraph.checkpoint.sqlite import SqliteSaver
-
-
-
-def main():
-    # 1. Setup Persistence for LangGraph
-    # This creates a local DB file 'state_checkpoint.db'
-    
-    # conn = sqlite3.connect("state_checkpoint.db", check_same_thread=False)
-    # memory = SqliteSaver(conn)
-
-    # 2. Create/Connect to Sandbox
-    # Note: If your sandbox provider allows 'reconnecting' to an ID, 
-    # you could store that ID in the DB too.
-    sandbox = Sandbox.create(timeout=3600)
-    tools = create_tools(sandbox)
-
-    # 3. Create LLM
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", # Adjusted to current model naming
-        google_api_key=os.getenv("GOOGLE_API_KEY"),
-        temperature=0
-    )
-
-    # 4. Lambda wrappers (same as your current logic)
-    architect_wrapper = lambda state: architect_node(state, llm, ARCHITECT_SYSTEM_PROMPT, tools)
-    tester_wrapper = lambda state: tester_node(state, llm, TESTER_SYSTEM_PROMPT, tools)
-    developer_wrapper = lambda state: developer_node(state, llm, DEVELOPER_SYSTEM_PROMPT, tools)
-    test_runner_wrapper = lambda state: test_runner_node(state, llm, TEST_RUNNER_SYSTEM_PROMPT, tools)
-    reviewer_wrapper = lambda state: reviewer_node(state, llm, REVIEWER_SYSTEM_PROMPT, tools)
-    human_wrapper = lambda state: human_node(state)
-    # 5. Build workflow (Pass the checkpointer here)
-    workflow = run_workflow(
-        architect_wrapper, 
-        tester_wrapper, 
-        developer_wrapper,
-        test_runner_wrapper, 
-        reviewer_wrapper,
-        human_wrapper,
-        tools
-    )
-
-    # 6. Configuration with thread_id
-    # The thread_id is what allows you to "resume" a specific session
-    config = {
-        "configurable": {"thread_id": "football_analysis_v1"},
-        "recursion_limit": 100
-    }
-
-    # 7. Execution Logic
-    # We check if state exists; if not, provide initial_state. 
-    # If it exists, passing None as input tells LangGraph to resume.
-    #existing_state = workflow.get_state(config)
-    
-    # if not existing_state.values:
-    #     print("Starting NEW session...")
-    #     initial_state = AgentState(current_stage="data")
-    #     result = workflow.invoke(initial_state, config)
-    # else:
-    #     print("Resuming PREVIOUS session...")
-    #     # This picks up exactly where the last node finished
-    #     result = workflow.invoke(None, config)
-
-    print("Starting NEW session...")
-    initial_state = AgentState(current_stage="data")
-    result = workflow.invoke(initial_state, config)
-    # 8. Show Output
-    print("\n--- Current Progress ---\n")
-    # result["messages"] contains the full history across resumes
-    if "messages" in result:
-        last_msg = result["messages"][-1]
-        print(f"Last State: {last_msg.content[:500]}...")
-
-    # 9. Cleanup
-    input("\nPress ENTER to close sandbox...")
-    sandbox.kill()
-
-if __name__ == "__main__":
-    main()
+}

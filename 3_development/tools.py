@@ -62,7 +62,10 @@ def create_tools(sandbox: Sandbox):
         except FileNotFoundError:
             return f"Error: Plan for {stage_name} not found at {file_path}"
 
+    # Inside create_tools(sandbox: Sandbox)
+    
     return {
-        "planning": [read_plan],
-        "coding": [run_code, write_files]
+        "read_plan": read_plan,
+        "exec_python": run_code,
+        "write_files": write_files
     }

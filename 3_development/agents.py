@@ -5,34 +5,77 @@ import os
 from output_schema import ArchitectOutput, TesterOutput, DeveloperOutput, ReviewerOutput
 
 
+import os
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from output_schema import ArchitectOutput
+from utils import read_plan_from_disk
+
 def architect_node(state, llm, system_prompt, tools):
     stage = state["current_stage"]
     
-    # 1. READ FROM LOCAL DISK
+    # 1. ADVANCED SITE SURVEY
+    # We don't just want names; we want to see the logic in 'src' and any existing 'configs'
+    discovery_script = """
+import os
+def get_structure(path):
+    if not os.path.exists(path): return []
+    return [os.path.join(dp, f) for dp, dn, filenames in os.walk(path) for f in filenames]
+
+def read_contents(files):
+    contents = {}
+    for f in files:
+        if f.endswith('.py') or f.endswith('.yaml') or f.endswith('.yml'):
+            try:
+                with open(f, 'r') as file:
+                    contents[f] = file.read()
+            except: pass
+    return contents
+
+src_files = get_structure('src')
+cfg_files = get_structure('configs')
+print("STRUCTURE_START")
+print(f"FILES: {src_files}")
+print(f"CONFIGS: {cfg_files}")
+print("CONTENTS_START")
+print(read_contents(src_files + cfg_files))
+"""
+    
+    discovery_raw = tools["exec_python"].invoke({"code": discovery_script})
+
+    # 2. READ RESEARCH PLAN
     plan_content = read_plan_from_disk(stage)
 
-    if plan_content.startswith("Error:"):
-        return {"messages": [HumanMessage(content=f"Stop: {plan_content}")]}
+    # 3. BUILD CONTEXTUAL PROMPT
+    # We merge the discovery results with the system prompt to give the LLM full awareness
+    full_human_message = (
+        f"--- SANDBOX ENVIRONMENT SURVEY ---\n{discovery_raw}\n\n"
+        f"--- NEW SPRINT GOAL: {stage.upper()} ---\n{plan_content}\n\n"
+        "INSTRUCTIONS:\n"
+        "1. Examine the 'CONTENTS' above. If a required configuration file from a previous stage "
+        "(like data.yaml) is missing from the 'configs' folder but the code exists in 'src', "
+        "REVERSE ENGINEER the missing config based on the source code.\n"
+        "2. Propose a NEW development plan and config for the current stage that integrates "
+        "seamlessly with the existing logic.\n"
+        "3. Do not overwrite existing files unless necessary for the current stage."
+    )
 
-    # 2. INVOKE STRUCTURED LLM
-    structured_llm = llm.with_structured_output(ArchitectOutput)
-    
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Architect stage: {stage}. Research Plan:\n\n{plan_content}")
+        HumanMessage(content=full_human_message)
     ]
-    
+
+    # 4. INVOKE STRUCTURED LLM
+    structured_llm = llm.with_structured_output(ArchitectOutput)
     output = structured_llm.invoke(messages)
 
-    # 3. PUSH CONFIG TO SANDBOX
-    # Now we move information from 'Local' to 'Sandbox'
-    tools["coding"][1].invoke({
+    # 5. PERSIST THE CONFIG (This creates the YAML in the sandbox)
+    tools["write_files"].invoke({
         "files": [{"path": f"configs/{stage}.yaml", "content": output.config_yaml}]
     })
 
-    # 4. UPDATE STATE
+    # 6. UPDATE STATE
     return {
-        "messages": [AIMessage(content=f"Architected {stage} based on local research plan.")],
+        "messages": [AIMessage(content=f"Architected {stage}. Verified existing codebase and reverse-engineered missing configs where necessary.")],
         "active_plan": output.development_plan,
         "active_config": output.config_yaml
     }
@@ -66,7 +109,7 @@ def tester_node(state, llm, system_prompt, tools):
         {"path": f"tester_outputs/{stage}_tests.py", "content": output.skipped_tests},
         {"path": f"tester_outputs/{stage}_requirements.txt", "content": output.testing_requirements}
     ]
-    tools["coding"][1].invoke({"files": files_to_write})
+    tools["write_files"].invoke({"files": files_to_write})
 
     # 4. Return the data to the global state
     return {
@@ -131,7 +174,7 @@ Your Task:
     
     if loop_count > 3:
         prompt += f"\nWARNING: You have used {loop_count} attempts. If you cannot fix it this time, explain why and stop."
-    llm_with_tools = llm.bind_tools(tools["coding"])
+    llm_with_tools = llm.bind_tools(list(tools.values()))
     # 5. Invoke & Write
     #structured_llm = llm.with_structured_output(DeveloperOutput)
     messages = [
@@ -150,21 +193,28 @@ Your Task:
     }
     
 def test_runner_node(state, llm, system_prompt, tools):
-    print('test_runner Start')
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content="Run pytest now.")
-    ]
+    print('--- TEST RUNNER START ---')
+    
+    # 1. Use the dictionary key we defined in create_tools
+    test_tool = tools.get('exec_python') 
+    
+    if not test_tool:
+        return {"messages": [HumanMessage(content="Error: exec_python tool not found.")]}
 
-    # Run pytest inside the sandbox
-    result = tools["coding"][0].invoke({
-        # -vv provides the full detail needed for the Agent to see the CSV ParserError properly
-        "code": "import sys; sys.path.insert(0, 'src'); import pytest; pytest.main(['-vv'])"
-    })
-    print("\n[TEST RUNNER] Pytest output:\n", result)
-    print('test_runner ends')
-    # Return raw output
-    return {"messages": [AIMessage(content=result)]}
+    # 2. Run pytest inside the sandbox
+    pytest_script = "import sys; sys.path.insert(0, 'src'); import pytest; pytest.main(['-vv'])"
+    
+    raw_result = test_tool.invoke({"code": pytest_script})
+
+    # 3. Format the output so the Reviewer knows exactly what it's looking at
+    # We wrap it in a block to distinguish it from conversation
+    formatted_content = f"SANDBOX_TEST_RESULTS:\n\n{raw_result}"
+
+    print(f"\n[TEST RUNNER] Results captured ({len(raw_result)} chars)")
+    print('--- TEST RUNNER END ---')
+    
+    # We return an AIMessage here because this node is "reporting" back to the graph
+    return {"messages": [AIMessage(content=formatted_content)]}
 
 def reviewer_node(state, llm, system_prompt, tools):
     print("--- REVIEWER START ---")

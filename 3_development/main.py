@@ -1,112 +1,109 @@
 import os
-import time
+import argparse
+import shutil
 from dotenv import load_dotenv
 from e2b_code_interpreter import Sandbox
-from agents import get_team
-from workflow import create_workflow
-from langchain_core.messages import HumanMessage
+
+# Core Logic Imports
+from tools import create_tools
+from agents import (
+    architect_node, tester_node, developer_node, 
+    test_runner_node, reviewer_node, human_node
+)
+from workflow import run_workflow
+from state import AgentState
+from utils import upload_package_to_sandbox, download_package_from_sandbox
+
+# Prompt Imports
+from prompts import SPRINT_PROMPTS 
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv()
 
-prompts = {
-    "architect": (
-        "You are the Lead Architect."
-        "Your task is to ingest the .md requirements and create a technical implementation ticket "
-        "for the developers. Specify the file paths (inside 'src/'), class names, and method signatures. "
-        "Maintain a consistent package structure and use British English throughout."
-    ),
-    "data_engineer": (
-        "You are a Senior Data Engineer. You work exclusively in the E2B sandbox. "
-        "Your goal is to implement Stage 1: Data."
-        "Crucially, implement mock data according to the data schema"
-        "and odds so the pipeline can be tested without real API keys. "
-        "Always verify your code by running it in the sandbox before finishing."
-    ),
-    "feature_engineer": (
-        "You are a Quant/Feature Engineer. You work exclusively in the E2B sandbox. "
-        "You handle Stage 2 (Features) and Stage 3 (Modelling). Use the dummy data from Stage 1 to calculate "
-        "metrics like rolling averages or ELO. Ensure all mathematical logic is robust."
-    ),
-    "betting_strategist": (
-        "You are a Betting Market Expert. You work exclusively in the E2B sandbox. "
-        "You handle Stage 4.betting strategy."
-        "Test this logic against synthetic model outputs."
-    ),
-    "qa_tester": (
-        "You are the QA and DevOps Lead. You handle Stage 5 and final packaging. "
-        "1. Write and run pytest suites for every module in 'src/'. "
-        "2. Ensure the full pipeline runs from dummy data to betting recommendation. "
-        "3. When the Architect signals completion, use 'run_code' to execute: "
-        "zip -r football_package.zip . -x '**/__pycache__/*' "
-        "4. Confirm the zip file exists in the sandbox root."
+ORCHESTRATOR_ROOT = "." 
+PACKAGE_ROOT = "../football_quant_package"
+
+def main(stage_name: str):
+    # 1. Validation & Prompt Loading
+    if stage_name not in SPRINT_PROMPTS:
+        print(f"❌ Error: Stage '{stage_name}' not found.")
+        return
+
+    prompts = SPRINT_PROMPTS[stage_name]
+    print(f"🚀 Initialising FRESH Sprint Stage: {stage_name.upper()}")
+
+    # 2. Infrastructure: Sandbox & LLM
+    sandbox = Sandbox.create(timeout=3600)
+    
+    # --- SYNC UP ---
+    # Put your local 'src' and 'configs' into the empty sandbox
+    upload_package_to_sandbox(sandbox, PACKAGE_ROOT, ORCHESTRATOR_ROOT)
+    
+    tools = create_tools(sandbox)
+
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.0-flash", 
+        google_api_key=os.getenv("GOOGLE_API_KEY"),
+        temperature=0
     )
-}
 
-def run_development():
-    if not os.getenv("GOOGLE_API_KEY") or not os.getenv("E2B_API_KEY"):
-        raise ValueError("Missing API keys! Please check your .env file.")
+    # 3. Node Wrappers
+    architect_wrapper = lambda state: architect_node(state, llm, prompts.ARCHITECT_SYSTEM_PROMPT, tools)
+    tester_wrapper = lambda state: tester_node(state, llm, prompts.TESTER_SYSTEM_PROMPT, tools)
+    developer_wrapper = lambda state: developer_node(state, llm, prompts.DEVELOPER_SYSTEM_PROMPT, tools)
+    test_runner_wrapper = lambda state: test_runner_node(state, llm, prompts.TEST_RUNNER_SYSTEM_PROMPT, tools)
+    reviewer_wrapper = lambda state: reviewer_node(state, llm, prompts.REVIEWER_SYSTEM_PROMPT, tools)
+    human_wrapper = lambda state: human_node(state)
 
-    # 1. Start the persistent sandbox
-    with Sandbox.create() as sandbox:
-        print(f"Sandbox started. ID: {sandbox.sandbox_id}")
-        
-        team = get_team(sandbox)
-        app = create_workflow(team)
-        
-        initial_state = {
-        "messages": [],
-        "current_stage": "data",
-        "is_ready_for_next_stage": False
-    }
+    # 4. Compile Workflow (Notice: No checkpointer/memory passed here)
+    workflow = run_workflow(
+        architect_wrapper, tester_wrapper, developer_wrapper,
+        test_runner_wrapper, reviewer_wrapper, human_wrapper, tools
+    )
+    
+    app = workflow.compile() 
 
-        # Added config for safety and future persistence
-        config = {
-            "recursion_limit": 50, # Sufficient for a multi-stage dev loop
-            "configurable": {
-            "thread_id": "dev_run_1"
-            }
-        }
+    # 5. Initial State (The starting point for every fresh run)
+    initial_state = AgentState(
+        current_stage=stage_name,
+        messages=[],
+        iteration_count=0,
+        active_failures=[],
+        tool_loop_count=0,
+        active_plan="",
+        active_config="",
+        active_mock_data="",
+        active_tests="",
+        active_requirements="",
+        human_instruction=""
+    )
 
-        print("Starting development loop...")
-        try:
-            # Pass the config as the second argument
-            app.invoke(initial_state, config=config)
-        except Exception as e:
-            print(f"Workflow failed: {e}")
-        print("\n--- DEVELOPMENT STAGES COMPLETE ---")
+    # 6. Execution
+    try:
+        # Standard invoke without config/thread_id because there is no persistence
+        result = app.invoke(initial_state, {"recursion_limit": 100})
 
-        # 3. INTERRUPT: Pause before closing the sandbox
-        print(f"\n[INSPECTION MODE]")
-        print(f"The sandbox is still LIVE. You can use the E2B CLI or Dashboard to inspect it.")
-        print(f"Sandbox URL: https://e2b.dev/dashboard?sandboxId={sandbox.sandbox_id}")
-        input("Press Enter to proceed to packaging and download (or Ctrl+C to abort)...")
+        # 7. Output Summary
+        print("\n--- Session Complete ---")
+        if "messages" in result:
+            last_msg = result["messages"][-1]
+            print(f"Final Status: {last_msg.content[:500]}...")
 
-        # 4. DOWNLOAD LOGIC
-        print("Requesting the QA Agent to package the project...")
-        # We manually trigger the QA agent one last time to zip the files
-        zipping_task = (
-            "Please zip the entire /home/user directory (excluding __pycache__) "
-            "into a file named 'football_package.zip'."
-        )
-        print("Requesting the QA Agent to package the project...")
-        team["qa_tester"].invoke({
-            "input": zipping_task
-        })
+        # --- SYNC DOWN ---
+        # Persist the AI's coding work by bringing it back to your laptop
+        download_package_from_sandbox(sandbox, PACKAGE_ROOT, ORCHESTRATOR_ROOT)
 
-        print("Downloading package to local disk...")
-        try:
-            # E2B stores files in /home/user by default
-            remote_path = "/home/user/football_package.zip"
-            buffer = sandbox.download_file(remote_path)
-            
-            local_filename = f"football_betting_pkg_{int(time.time())}.zip"
-            with open(local_filename, "wb") as f:
-                f.write(buffer)
-            
-            print(f"✅ Success! Package saved as: {local_filename}")
-        except Exception as e:
-            print(f"❌ Download failed: {e}")
-            print("Check if the QA agent created the zip file correctly in /home/user/")
+    except Exception as e:
+        print(f"❌ Execution Error: {e}")
+
+    finally:
+        # 8. Cleanup
+        input("\nPress ENTER to close sandbox...")
+        sandbox.kill()
 
 if __name__ == "__main__":
-    run_development()
+    parser = argparse.ArgumentParser(description="Football Quant Orchestrator")
+    parser.add_argument("--stage", type=str, default="data", help="Sprints: data, features, modelling")
+    
+    args = parser.parse_args()
+    main(stage_name=args.stage)

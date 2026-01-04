@@ -1,6 +1,71 @@
 import re
 import os
 
+import os
+import shutil
+import io
+
+def upload_package_to_sandbox(sandbox, package_root, orchestrator_root):
+    """
+    Combines the local package and orchestrator configs into one sandbox.
+    """
+    zip_path = "sync_package"
+    temp_dir = "temp_sync_staging"
+
+    # 1. Create a temporary staging area
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    os.makedirs(temp_dir)
+
+    try:
+        # 2. Copy the Package code (src)
+        src_local = os.path.join(package_root, "src")
+        if os.path.exists(src_local):
+            shutil.copytree(src_local, os.path.join(temp_dir, "src"))
+
+        # 3. Copy the Orchestrator configs (configs)
+        configs_local = os.path.join(orchestrator_root, "configs")
+        if os.path.exists(configs_local):
+            shutil.copytree(configs_local, os.path.join(temp_dir, "configs"))
+
+        # 4. Zip the combined staging area
+        shutil.make_archive(zip_path, 'zip', root_dir=temp_dir)
+
+        # 5. Upload and Unzip
+        with open(f"{zip_path}.zip", "rb") as f:
+            sandbox.files.upload(f)
+        
+        sandbox.commands.run(f"unzip -o {zip_path}.zip -d .")
+        sandbox.commands.run(f"rm {zip_path}.zip")
+        
+        print("✅ Sandbox synchronised: /src (from Package) and /configs (from Orchestrator)")
+
+    finally:
+        # Cleanup
+        if os.path.exists(f"{zip_path}.zip"): os.remove(f"{zip_path}.zip")
+        if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
+
+def download_package_from_sandbox(sandbox, package_root, orchestrator_root):
+    """
+    Sends 'src' updates back to the package and 'configs' updates to the orchestrator.
+    """
+    # Sync src -> Package
+    src_bytes = sandbox.files.download("src")
+    with open("src_sync.zip", "wb") as f: f.write(src_bytes)
+    shutil.unpack_archive("src_sync.zip", package_root)
+    os.remove("src_sync.zip")
+
+    # Sync configs -> Orchestrator
+    try:
+        config_bytes = sandbox.files.download("configs")
+        with open("cfg_sync.zip", "wb") as f: f.write(config_bytes)
+        shutil.unpack_archive("cfg_sync.zip", orchestrator_root)
+        os.remove("cfg_sync.zip")
+    except:
+        print("No configs found to download.")
+    
+    print("✅ Local files updated from Sandbox.")
+
 def read_plan_from_disk(stage: str) -> str:
     """
     Robustly reads the .md plan file using absolute paths.

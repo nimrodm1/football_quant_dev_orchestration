@@ -14,3 +14,4 @@ class AgentState(TypedDict):
     active_failures: List[dict]
     human_instruction: str
     tool_loop_count: int
+    metadata: dict
