@@ -21,3 +21,4 @@ build/
 data/raw/
 data/processed/*.csv
 !data/processed/.gitkeep
+temp_sync_staging*/

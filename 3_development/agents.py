@@ -258,14 +258,37 @@ def reviewer_node(state, llm, system_prompt, tools):
     }
 
 def human_node(state):
-    print("\n--- 🛠️ HUMAN INTERVENTION ---")
-    print("The Reviewer has analysed the failures. Current failures:")
-    for f in state.get("active_failures", []):
-        print(f" - {f.get('failure_type')}: {f.get('actionable_fix')}")
+    print("\n" + "="*50)
+    print("🛠️  HUMAN INTERVENTION REQUIRED")
+    print("="*50)
+
+    # 1. Show the latest test failures
+    if state.get("active_failures"):
+        print("\n❌ LATEST TEST FAILURES:")
+        for failure in state["active_failures"]:
+            print(f" - {failure}")
+
+    # 2. Show the Reviewer's summary (if it exists in the last message)
+    if state.get("messages"):
+        last_msg = state["messages"][-1]
+        print("\n📝 REVIEWER'S ASSESSMENT:")
+        print(last_msg.content)
+
+    print("\n" + "-"*50)
+    print("INSTRUCTIONS:")
+    print(" - Type instructions to guide the agents.")
+    print(" - Type 'EXIT' to stop and save all files to your local machine.")
+    print("-"*50)
     
-    # Prompt the user for ad hoc instructions
-    user_input = input("\nProvide specific instructions for the Developer (or press Enter to let the agent proceed): ")
+    user_input = input(">> ").strip()
+    
+    if user_input.upper() == "EXIT":
+        return {
+            "messages": [HumanMessage(content="User requested exit and download.")],
+            "human_instruction": "EXIT_SIGNAL" 
+        }
     
     return {
-        "human_instruction": user_input if user_input.strip() else "No additional instructions."
+        "messages": [HumanMessage(content=user_input)],
+        "human_instruction": user_input
     }

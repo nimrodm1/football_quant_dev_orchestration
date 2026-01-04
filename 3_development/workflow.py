@@ -1,6 +1,7 @@
 from state import AgentState
 from langgraph.graph import StateGraph, END
  
+from langgraph.prebuilt import ToolNode
 
 def architect_condition(state):
     last_message = state["messages"][-1].content
@@ -48,7 +49,16 @@ def should_continue(state) -> Literal["tools", "test_runner"]:
     # Otherwise, the Developer finished normally
     return "test_runner"
 
-from langgraph.prebuilt import ToolNode
+
+def human_router(state: AgentState):
+    # Check if the user typed 'EXIT'
+    if state.get("human_instruction") == "EXIT_SIGNAL":
+        print("👋 User requested termination. Syncing files and closing...")
+        return END
+    
+    # Otherwise, send the human's instructions directly to the Developer
+    return "developer"
+
 
 def run_workflow(architect_node, tester_node, developer_node, test_runner_node, reviewer_node, human_node, tools):
     workflow = StateGraph(AgentState)
@@ -57,7 +67,7 @@ def run_workflow(architect_node, tester_node, developer_node, test_runner_node, 
     workflow.add_node("architect", architect_node)
     workflow.add_node("tester", tester_node)
     workflow.add_node("developer", developer_node)
-    workflow.add_node("tools", ToolNode(tools["coding"])) # NEW: The Sandbox Executor
+    workflow.add_node("tools", ToolNode(list(tools.values()))) # NEW: The Sandbox Executor
     workflow.add_node("test_runner", test_runner_node)
     workflow.add_node("reviewer", reviewer_node)
     workflow.add_node("human_instructor", human_node)
@@ -94,6 +104,13 @@ def run_workflow(architect_node, tester_node, developer_node, test_runner_node, 
 
     # 5. The Fix Loop (Human-in-the-loop)
     workflow.add_edge("reviewer", "human_instructor")
-    workflow.add_edge("human_instructor", "developer")
+    workflow.add_conditional_edges(
+    "human_instructor", 
+    human_router,
+    {
+        "developer": "developer",
+        END: END
+    }
+)
 
     return workflow.compile()

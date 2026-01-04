@@ -23,14 +23,13 @@ load_dotenv()
 ORCHESTRATOR_ROOT = "." 
 PACKAGE_ROOT = "../football_quant_package"
 
-def main(stage_name: str):
+def main(stage: str):
     # 1. Validation & Prompt Loading
-    if stage_name not in SPRINT_PROMPTS:
-        print(f"❌ Error: Stage '{stage_name}' not found.")
+    if stage not in SPRINT_PROMPTS:
+        print(f"❌ Error: Stage '{stage}' not found.")
         return
 
-    prompts = SPRINT_PROMPTS[stage_name]
-    print(f"🚀 Initialising FRESH Sprint Stage: {stage_name.upper()}")
+    print(f"🚀 Initialising FRESH Sprint Stage: {stage.upper()}")
 
     # 2. Infrastructure: Sandbox & LLM
     sandbox = Sandbox.create(timeout=3600)
@@ -42,30 +41,32 @@ def main(stage_name: str):
     tools = create_tools(sandbox)
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash", 
+        model="gemini-2.5-flash", 
         google_api_key=os.getenv("GOOGLE_API_KEY"),
         temperature=0
     )
 
+    stage_prompts = SPRINT_PROMPTS[stage]
+
     # 3. Node Wrappers
-    architect_wrapper = lambda state: architect_node(state, llm, prompts.ARCHITECT_SYSTEM_PROMPT, tools)
-    tester_wrapper = lambda state: tester_node(state, llm, prompts.TESTER_SYSTEM_PROMPT, tools)
-    developer_wrapper = lambda state: developer_node(state, llm, prompts.DEVELOPER_SYSTEM_PROMPT, tools)
-    test_runner_wrapper = lambda state: test_runner_node(state, llm, prompts.TEST_RUNNER_SYSTEM_PROMPT, tools)
-    reviewer_wrapper = lambda state: reviewer_node(state, llm, prompts.REVIEWER_SYSTEM_PROMPT, tools)
+    architect_wrapper = lambda state: architect_node(state, llm, stage_prompts["ARCHITECT_SYSTEM_PROMPT"], tools)
+    tester_wrapper = lambda state: tester_node(state, llm, stage_prompts["TESTER_SYSTEM_PROMPT"], tools)
+    developer_wrapper = lambda state: developer_node(state, llm, stage_prompts["DEVELOPER_SYSTEM_PROMPT"], tools)
+    test_runner_wrapper = lambda state: test_runner_node(state, llm,stage_prompts["TEST_RUNNER_SYSTEM_PROMPT"], tools)
+    reviewer_wrapper = lambda state: reviewer_node(state, llm, stage_prompts["REVIEWER_SYSTEM_PROMPT"], tools)
     human_wrapper = lambda state: human_node(state)
 
     # 4. Compile Workflow (Notice: No checkpointer/memory passed here)
-    workflow = run_workflow(
+    app = run_workflow(
         architect_wrapper, tester_wrapper, developer_wrapper,
         test_runner_wrapper, reviewer_wrapper, human_wrapper, tools
     )
     
-    app = workflow.compile() 
+    #app = workflow.compile() 
 
     # 5. Initial State (The starting point for every fresh run)
     initial_state = AgentState(
-        current_stage=stage_name,
+        current_stage=stage,
         messages=[],
         iteration_count=0,
         active_failures=[],
@@ -106,4 +107,4 @@ if __name__ == "__main__":
     parser.add_argument("--stage", type=str, default="data", help="Sprints: data, features, modelling")
     
     args = parser.parse_args()
-    main(stage_name=args.stage)
+    main(stage=args.stage)

@@ -1,13 +1,9 @@
-# prompts/__init__.py
-
-# 1. Import your individual stage files
-from . import data_prompts
-from . import feature_prompts
-# from . import modelling_prompts (when you're ready)
+# 1. Import the dictionaries from the specific files
+from .data_prompts import DATA_PROMPTS
+from .features_prompts import FEATURE_PROMPTS
 
 # 2. Map them to a name
 SPRINT_PROMPTS = {
-    "data": data_prompts,
-    "features": feature_prompts,
-    # "modelling": modelling_prompts
+    "data": DATA_PROMPTS,
+    "features": FEATURE_PROMPTS,
 }

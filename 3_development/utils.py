@@ -1,70 +1,91 @@
 import re
 import os
+import shutil
+import time
 
 import os
 import shutil
-import io
+import time
 
 def upload_package_to_sandbox(sandbox, package_root, orchestrator_root):
-    """
-    Combines the local package and orchestrator configs into one sandbox.
-    """
-    zip_path = "sync_package"
+    zip_path = "sync_package" 
     temp_dir = "temp_sync_staging"
 
-    # 1. Create a temporary staging area
+    # 1. Robust Cleanup (Windows-safe)
     if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-    os.makedirs(temp_dir)
+        try:
+            shutil.rmtree(temp_dir)
+        except PermissionError:
+            old_dir = f"{temp_dir}_{int(time.time())}"
+            os.rename(temp_dir, old_dir)
+    
+    os.makedirs(temp_dir, exist_ok=True)
 
     try:
-        # 2. Copy the Package code (src)
+        # 2. Prepare the payload (Now including tests)
         src_local = os.path.join(package_root, "src")
-        if os.path.exists(src_local):
-            shutil.copytree(src_local, os.path.join(temp_dir, "src"))
-
-        # 3. Copy the Orchestrator configs (configs)
         configs_local = os.path.join(orchestrator_root, "configs")
+        tests_local = os.path.join(package_root, "tests") # Path to local tests
+        
+        if os.path.exists(src_local):
+            shutil.copytree(src_local, os.path.join(temp_dir, "src"), dirs_exist_ok=True)
         if os.path.exists(configs_local):
-            shutil.copytree(configs_local, os.path.join(temp_dir, "configs"))
+            shutil.copytree(configs_local, os.path.join(temp_dir, "configs"), dirs_exist_ok=True)
+        if os.path.exists(tests_local):
+            shutil.copytree(tests_local, os.path.join(temp_dir, "tests"), dirs_exist_ok=True)
 
-        # 4. Zip the combined staging area
+        # 3. Create the archive
         shutil.make_archive(zip_path, 'zip', root_dir=temp_dir)
+        zip_file_full = f"{zip_path}.zip"
 
-        # 5. Upload and Unzip
-        with open(f"{zip_path}.zip", "rb") as f:
-            sandbox.files.upload(f)
+        # 4. UPLOAD
+        with open(zip_file_full, "rb") as f:
+            file_content = f.read()
+            sandbox.files.write(zip_file_full, file_content)
         
-        sandbox.commands.run(f"unzip -o {zip_path}.zip -d .")
-        sandbox.commands.run(f"rm {zip_path}.zip")
+        # 5. Remote Unzip
+        sandbox.commands.run(f"unzip -o {zip_file_full} -d .")
+        sandbox.commands.run(f"rm {zip_file_full}")
         
-        print("✅ Sandbox synchronised: /src (from Package) and /configs (from Orchestrator)")
+        print("✅ Sandbox synchronised successfully (src, configs, tests).")
 
     finally:
-        # Cleanup
-        if os.path.exists(f"{zip_path}.zip"): os.remove(f"{zip_path}.zip")
-        if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
+        if os.path.exists(f"{zip_path}.zip"):
+            os.remove(f"{zip_path}.zip")
 
 def download_package_from_sandbox(sandbox, package_root, orchestrator_root):
     """
-    Sends 'src' updates back to the package and 'configs' updates to the orchestrator.
+    Sends 'src' and 'tests' updates back to the package and 'configs' updates to the orchestrator.
     """
-    # Sync src -> Package
-    src_bytes = sandbox.files.download("src")
-    with open("src_sync.zip", "wb") as f: f.write(src_bytes)
-    shutil.unpack_archive("src_sync.zip", package_root)
-    os.remove("src_sync.zip")
+    # 1. Sync src -> Package
+    try:
+        src_bytes = sandbox.files.download("src")
+        with open("src_sync.zip", "wb") as f: f.write(src_bytes)
+        shutil.unpack_archive("src_sync.zip", package_root)
+        os.remove("src_sync.zip")
+    except Exception as e:
+        print(f"Warning: Could not download src: {e}")
 
-    # Sync configs -> Orchestrator
+    # 2. Sync tests -> Package (NEW)
+    try:
+        test_bytes = sandbox.files.download("tests")
+        with open("tests_sync.zip", "wb") as f: f.write(test_bytes)
+        # This will unpack into PACKAGE_ROOT/tests
+        shutil.unpack_archive("tests_sync.zip", package_root)
+        os.remove("tests_sync.zip")
+    except Exception:
+        print("No tests found to download.")
+
+    # 3. Sync configs -> Orchestrator
     try:
         config_bytes = sandbox.files.download("configs")
         with open("cfg_sync.zip", "wb") as f: f.write(config_bytes)
         shutil.unpack_archive("cfg_sync.zip", orchestrator_root)
         os.remove("cfg_sync.zip")
-    except:
+    except Exception:
         print("No configs found to download.")
     
-    print("✅ Local files updated from Sandbox.")
+    print("✅ Local files (src, tests, configs) updated from Sandbox.")
 
 def read_plan_from_disk(stage: str) -> str:
     """
