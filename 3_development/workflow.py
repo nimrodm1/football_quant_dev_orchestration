@@ -38,11 +38,11 @@ def should_continue(state) -> Literal["tools", "test_runner"]:
     loop_count = state.get("tool_loop_count", 0)
     
     # If the LLM made a tool call AND we are under the limit
-    if last_message.tool_calls and loop_count < 5:
+    if last_message.tool_calls and loop_count < 3:
         return "tools"
     
     # Circuit Breaker: If we've looped 5+ times, force a handover
-    if last_message.tool_calls and loop_count >= 5:
+    if last_message.tool_calls and loop_count >= 3:
         print(f"⚠️ Max iterations ({loop_count}) reached. Forcing handover.")
         return "test_runner"
     

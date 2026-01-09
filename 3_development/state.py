@@ -15,3 +15,4 @@ class AgentState(TypedDict):
     human_instruction: str
     tool_loop_count: int
     metadata: dict
+    last_test_output: str

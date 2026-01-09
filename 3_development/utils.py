@@ -2,10 +2,8 @@ import re
 import os
 import shutil
 import time
-
-import os
-import shutil
-import time
+import base64
+from pathlib import Path
 
 def upload_package_to_sandbox(sandbox, package_root, orchestrator_root):
     zip_path = "sync_package" 
@@ -55,38 +53,70 @@ def upload_package_to_sandbox(sandbox, package_root, orchestrator_root):
 
 def download_package_from_sandbox(sandbox, package_root, orchestrator_root):
     """
-    Sends 'src' and 'tests' updates back to the package and 'configs' updates to the orchestrator.
+    Syncs archives using Base64 encoding to prevent 'Bad magic number' corruption.
     """
-    # 1. Sync src -> Package
-    try:
-        src_bytes = sandbox.files.download("src")
-        with open("src_sync.zip", "wb") as f: f.write(src_bytes)
-        shutil.unpack_archive("src_sync.zip", package_root)
-        os.remove("src_sync.zip")
-    except Exception as e:
-        print(f"Warning: Could not download src: {e}")
+    # 1. Archive AND Base64 encode inside the sandbox
+    zip_command = """
+import shutil
+import os
+import base64
 
-    # 2. Sync tests -> Package (NEW)
-    try:
-        test_bytes = sandbox.files.download("tests")
-        with open("tests_sync.zip", "wb") as f: f.write(test_bytes)
-        # This will unpack into PACKAGE_ROOT/tests
-        shutil.unpack_archive("tests_sync.zip", package_root)
-        os.remove("tests_sync.zip")
-    except Exception:
-        print("No tests found to download.")
+# Clean up pycache first
+for root, dirs, files in os.walk('.'):
+    for d in dirs:
+        if d == '__pycache__':
+            shutil.rmtree(os.path.join(root, d))
 
-    # 3. Sync configs -> Orchestrator
-    try:
-        config_bytes = sandbox.files.download("configs")
-        with open("cfg_sync.zip", "wb") as f: f.write(config_bytes)
-        shutil.unpack_archive("cfg_sync.zip", orchestrator_root)
-        os.remove("cfg_sync.zip")
-    except Exception:
-        print("No configs found to download.")
+# Now zip and encode
+for folder in ['src', 'tests', 'configs']:
+    if os.path.exists(folder):
+        zip_path = shutil.make_archive(f'{folder}_export', 'zip', folder)
+        with open(zip_path, 'rb') as f:
+            encoded_string = base64.b64encode(f.read()).decode('utf-8')
+        with open(f'{folder}_export.b64', 'w') as f:
+            f.write(encoded_string)
+"""
+    print("📦 Zipping and encoding in sandbox...")
+    sandbox.run_code(zip_command)
+
+    # 2. Map the .b64 files to local destinations
+    sync_map = [
+        ("src_export.b64", os.path.join(package_root, "src")),
+        ("tests_export.b64", os.path.join(package_root, "test")), 
+        ("configs_export.b64", os.path.join(orchestrator_root, "configs"))
+    ]
+
+    for b64_name, dest in sync_map:
+        try:
+            # Read the safe text string
+            response = sandbox.files.read(b64_name)
+            
+            # Handle different API return types (object vs string)
+            b64_content = response.data if hasattr(response, 'data') else response
+            
+            if not b64_content:
+                continue
+
+            # Decode the Base64 back into binary ZIP data
+            zip_data = base64.b64decode(b64_content)
+            
+            local_zip = f"temp_{b64_name.replace('.b64', '.zip')}"
+            with open(local_zip, "wb") as f:
+                f.write(zip_data)
+
+            # Unpack
+            print(f"🚚 Unpacking {b64_name} into {dest}...")
+            os.makedirs(dest, exist_ok=True)
+            shutil.unpack_archive(local_zip, dest)
+            
+            os.remove(local_zip)
+            print(f"✅ {b64_name.split('_')[0]} synced successfully.")
+            
+        except Exception as e:
+            print(f"ℹ️ Skipping {b64_name}: {e}")
+
+    print("🏁 Sync complete.")
     
-    print("✅ Local files (src, tests, configs) updated from Sandbox.")
-
 def read_plan_from_disk(stage: str) -> str:
     """
     Robustly reads the .md plan file using absolute paths.
@@ -126,15 +156,6 @@ def extract_config_from_response(text: str) -> str | None:
     if match:
         return match.group(1).strip()
     return None
-
-
-from pathlib import Path
-
-from pathlib import Path
-import re
-
-from pathlib import Path
-import re
 
 def extract_files_to_modify(text):
     # 1. Isolate the FILES_TO_MODIFY block (colon optional)

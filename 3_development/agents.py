@@ -211,10 +211,13 @@ def test_runner_node(state, llm, system_prompt, tools):
     formatted_content = f"SANDBOX_TEST_RESULTS:\n\n{raw_result}"
 
     print(f"\n[TEST RUNNER] Results captured ({len(raw_result)} chars)")
+    print(raw_result)
     print('--- TEST RUNNER END ---')
     
     # We return an AIMessage here because this node is "reporting" back to the graph
-    return {"messages": [AIMessage(content=formatted_content)]}
+    return {"messages": [AIMessage(content=formatted_content)],
+            "last_test_output": raw_result # Store it in state for the Human Node
+    }
 
 def reviewer_node(state, llm, system_prompt, tools):
     print("--- REVIEWER START ---")
@@ -257,28 +260,49 @@ def reviewer_node(state, llm, system_prompt, tools):
         "tool_loop_count": 0
     }
 
+from langchain_core.messages import HumanMessage
+
 def human_node(state):
-    print("\n" + "="*50)
+    print("\n" + "="*60)
+    print("📋 RAW PYTEST LOG SNAPSHOT")
+    print("="*60)
+    
+    # 1. Show the raw output from the last test run (if available)
+    # We take the last 30 lines to avoid flooding the terminal while showing the errors
+    raw_output = state.get("last_test_output", "No raw pytest output found in state.")
+    if raw_output:
+        lines = raw_output.splitlines()
+        snapshot = "\n".join(lines[-30:]) if len(lines) > 30 else raw_output
+        print(snapshot)
+    
+    print("\n" + "="*60)
     print("🛠️  HUMAN INTERVENTION REQUIRED")
-    print("="*50)
+    print("="*60)
 
-    # 1. Show the latest test failures
+    # 2. Show the parsed failures (from the state list)
     if state.get("active_failures"):
-        print("\n❌ LATEST TEST FAILURES:")
+        print("\n❌ LATEST TEST FAILURES (Parsed):")
         for failure in state["active_failures"]:
-            print(f" - {failure}")
+            # If the failure is a dict from the reviewer, print it cleanly
+            if isinstance(failure, dict):
+                file = failure.get('file_path', 'Unknown')
+                cause = failure.get('root_cause', 'Unknown error')
+                print(f" • [{file}]: {cause}")
+            else:
+                print(f" • {failure}")
 
-    # 2. Show the Reviewer's summary (if it exists in the last message)
+    # 3. Show the Reviewer's high-level summary
     if state.get("messages"):
         last_msg = state["messages"][-1]
+        # Only print if it looks like it's from the reviewer
         print("\n📝 REVIEWER'S ASSESSMENT:")
         print(last_msg.content)
 
-    print("\n" + "-"*50)
-    print("INSTRUCTIONS:")
-    print(" - Type instructions to guide the agents.")
-    print(" - Type 'EXIT' to stop and save all files to your local machine.")
-    print("-"*50)
+    print("\n" + "-"*60)
+    print("CONTROLS:")
+    print(" - Type specific instructions for the Developer (e.g., 'Fix the import on line 10').")
+    print(" - Type 'EXIT' to end the sprint and download all files to your local machine.")
+    print("-"*60)
     
     user_input = input(">> ").strip()
     
@@ -288,7 +312,9 @@ def human_node(state):
             "human_instruction": "EXIT_SIGNAL" 
         }
     
+    # We clear active_failures so the next loop starts fresh
     return {
         "messages": [HumanMessage(content=user_input)],
-        "human_instruction": user_input
+        "human_instruction": user_input,
+        "active_failures": [] 
     }

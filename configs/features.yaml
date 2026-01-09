@@ -1,0 +1,36 @@
+feature_list:
+  - home_team_idx
+  - away_team_idx
+  - delta_t
+  - home_goals
+  - away_goals
+  - implied_prob_home_B365 # Updated to reflect bookmaker prefix
+  - implied_prob_draw_B365
+  - implied_prob_away_B365
+  - implied_prob_home_Max  # Updated to reflect bookmaker prefix
+  - implied_prob_draw_Max
+  - implied_prob_away_Max
+  - implied_prob_over_2_5_B365 # Updated to reflect bookmaker prefix
+  - implied_prob_under_2_5_B365
+  - implied_prob_over_2_5_P # Updated to reflect bookmaker prefix
+  - implied_prob_under_2_5_P
+  - implied_prob_over_2_5_Max # Updated to reflect bookmaker prefix
+  - implied_prob_under_2_5_Max
+  - best_odds_home
+  - best_odds_draw
+  - best_odds_away
+  - best_odds_over_2_5
+  - best_odds_under_2_5
+  - closing_odds_home
+  - closing_odds_draw
+  - closing_odds_away
+
+hyperparameters:
+  time_decay_scaling_factor: 0.1
+  reference_date_for_decay: "2024-01-01" # YYYY-MM-DD format
+  # Bookmakers to use for calculating implied probabilities for match odds (pre-match)
+  implied_prob_bookmakers_match_odds: ["B365", "Max"]
+  # Bookmakers to use for calculating implied probabilities for over/under 2.5 (pre-match)
+  implied_prob_bookmakers_over_under: ["B365", "P", "Max"]
+  # Preferred provider prefix for closing odds (e.g., 'PS' for Pinnacle Sports). Set to null or remove for only Max odds.
+  closing_odds_preferred_provider: "PS"
