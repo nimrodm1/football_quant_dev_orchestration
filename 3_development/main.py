@@ -13,6 +13,7 @@ from agents import (
 from workflow import run_workflow
 from state import AgentState
 from utils import upload_package_to_sandbox, download_package_from_sandbox
+from logger import SprintLogger
 
 # Prompt Imports
 from prompts import SPRINT_PROMPTS 
@@ -30,6 +31,10 @@ def main(stage: str):
         return
 
     print(f"🚀 Initialising FRESH Sprint Stage: {stage.upper()}")
+    
+    # 1.5 Initialize Logger
+    logger = SprintLogger(stage, log_dir="../logs")
+    logger.sprint_start()
 
     # 2. Infrastructure: Sandbox & LLM
     sandbox = Sandbox.create(timeout=3600)
@@ -48,13 +53,13 @@ def main(stage: str):
 
     stage_prompts = SPRINT_PROMPTS[stage]
 
-    # 3. Node Wrappers
-    architect_wrapper = lambda state: architect_node(state, llm, stage_prompts["ARCHITECT_SYSTEM_PROMPT"], tools)
-    tester_wrapper = lambda state: tester_node(state, llm, stage_prompts["TESTER_SYSTEM_PROMPT"], tools)
-    developer_wrapper = lambda state: developer_node(state, llm, stage_prompts["DEVELOPER_SYSTEM_PROMPT"], tools)
-    test_runner_wrapper = lambda state: test_runner_node(state, llm,stage_prompts["TEST_RUNNER_SYSTEM_PROMPT"], tools)
-    reviewer_wrapper = lambda state: reviewer_node(state, llm, stage_prompts["REVIEWER_SYSTEM_PROMPT"], tools)
-    human_wrapper = lambda state: human_node(state)
+    # 3. Node Wrappers (pass logger to each agent)
+    architect_wrapper = lambda state: architect_node(state, llm, stage_prompts["ARCHITECT_SYSTEM_PROMPT"], tools, logger)
+    tester_wrapper = lambda state: tester_node(state, llm, stage_prompts["TESTER_SYSTEM_PROMPT"], tools, logger)
+    developer_wrapper = lambda state: developer_node(state, llm, stage_prompts["DEVELOPER_SYSTEM_PROMPT"], tools, logger)
+    test_runner_wrapper = lambda state: test_runner_node(state, llm,stage_prompts["TEST_RUNNER_SYSTEM_PROMPT"], tools, logger)
+    reviewer_wrapper = lambda state: reviewer_node(state, llm, stage_prompts["REVIEWER_SYSTEM_PROMPT"], tools, logger)
+    human_wrapper = lambda state: human_node(state, logger)
 
     # 4. Compile Workflow (Notice: No checkpointer/memory passed here)
     app = run_workflow(
@@ -90,12 +95,17 @@ def main(stage: str):
             last_msg = result["messages"][-1]
             print(f"Final Status: {last_msg.content[:500]}...")
 
+        logger.sprint_end("SUCCESS")
+        print(f"\n📋 Log file: {logger.get_log_file()}")
+
         # --- SYNC DOWN ---
         # Persist the AI's coding work by bringing it back to your laptop
         download_package_from_sandbox(sandbox, PACKAGE_ROOT, ORCHESTRATOR_ROOT)
 
     except Exception as e:
         print(f"❌ Execution Error: {e}")
+        logger.error(str(e))
+        logger.sprint_end("FAILED")
 
     finally:
         # 8. Cleanup
