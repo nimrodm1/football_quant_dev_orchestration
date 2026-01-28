@@ -10,8 +10,11 @@ from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from output_schema import ArchitectOutput
 from utils import read_plan_from_disk
 
-def architect_node(state, llm, system_prompt, tools):
+def architect_node(state, llm, system_prompt, tools, logger=None):
     stage = state["current_stage"]
+    
+    if logger:
+        logger.agent_start("architect")
     
     # 1. ADVANCED SITE SURVEY
     # We don't just want names; we want to see the logic in 'src' and any existing 'configs'
@@ -73,15 +76,24 @@ print(read_contents(src_files + cfg_files))
         "files": [{"path": f"configs/{stage}.yaml", "content": output.config_yaml}]
     })
 
-    # 6. UPDATE STATE
+    # 6. Log reasoning
+    if logger:
+        logger.reasoning("architect", output.reasoning)
+        logger.agent_end("architect", f"{len(output.files_to_create)} files planned")
+
+    # 7. UPDATE STATE
     return {
         "messages": [AIMessage(content=f"Architected {stage}. Verified existing codebase and reverse-engineered missing configs where necessary.")],
         "active_plan": output.development_plan,
         "active_config": output.config_yaml
     }
 
-def tester_node(state, llm, system_prompt, tools):
+def tester_node(state, llm, system_prompt, tools, logger=None):
     stage = state["current_stage"]
+    
+    if logger:
+        logger.agent_start("tester")
+    
     # We now get the config directly from state instead of reading from disk!
     config_text = state.get("active_config", "")
     
@@ -111,7 +123,11 @@ def tester_node(state, llm, system_prompt, tools):
     ]
     tools["write_files"].invoke({"files": files_to_write})
 
-    # 4. Return the data to the global state
+    # 4. Log
+    if logger:
+        logger.agent_end("tester", "mock data & tests generated")
+
+    # 5. Return the data to the global state
     return {
         "messages": [AIMessage(content="Tester has generated mock data and test scaffolding.")],
         "active_mock_data": output.mock_data,
@@ -119,10 +135,14 @@ def tester_node(state, llm, system_prompt, tools):
         "active_requirements": output.testing_requirements
     }
 
-def developer_node(state, llm, system_prompt, tools):
+def developer_node(state, llm, system_prompt, tools, logger=None):
     print('\n--- DEVELOPER START ---')
     stage = state["current_stage"]
     loop_count = state.get("tool_loop_count", 0) + 1
+    
+    if logger:
+        logger.agent_start(f"developer (iteration {loop_count})")
+    
     # 1. Retrieve Structured Blueprints from State
     plan = state.get("active_plan", "")
     config = state.get("active_config", "")
@@ -185,6 +205,13 @@ Your Task:
     current_request = HumanMessage(content=prompt)
     
     response = llm_with_tools.invoke(history + [current_request])
+    
+    # Log developer work
+    if logger:
+        # Extract reasoning from response text if available
+        if hasattr(response, 'content') and response.content:
+            logger.reasoning("developer", response.content)
+        logger.agent_end("developer", f"Iteration {loop_count}")
         
     return {
         "messages": [response], 
@@ -192,35 +219,67 @@ Your Task:
         "tool_loop_count": loop_count
     }
     
-def test_runner_node(state, llm, system_prompt, tools):
+def test_runner_node(state, llm, system_prompt, tools, logger=None):
     print('--- TEST RUNNER START ---')
     
-    # 1. Use the dictionary key we defined in create_tools
-    test_tool = tools.get('exec_python') 
+    if logger:
+        logger.agent_start("test_runner")
+    
+    test_tool = tools.get('exec_python')
     
     if not test_tool:
         return {"messages": [HumanMessage(content="Error: exec_python tool not found.")]}
 
-    # 2. Run pytest inside the sandbox
-    pytest_script = "import sys; sys.path.insert(0, 'src'); import pytest; pytest.main(['-vv'])"
+    # IMPROVED SCRIPT: 
+    # 1. Resolves absolute paths to avoid CWD confusion.
+    # 2. Explicitly targets the 'tests' directory.
+    # 3. Captures the exit code for the Reviewer.
+    pytest_script = """
+import sys
+import os
+import pytest
+
+# Ensure the 'src' directory is in the path so 'import quant_football' works
+base_dir = os.getcwd()
+src_path = os.path.join(base_dir, 'src')
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+# Explicitly define the tests directory (outside src)
+tests_path = os.path.join(base_dir, 'tests')
+
+# Run pytest on the specific tests folder
+# We use a custom plugin or capture to ensure output is returned to the tool
+exit_code = pytest.main(['-vv', tests_path])
+
+print(f"\\nPytest exited with code: {exit_code}")
+"""
     
     raw_result = test_tool.invoke({"code": pytest_script})
 
-    # 3. Format the output so the Reviewer knows exactly what it's looking at
-    # We wrap it in a block to distinguish it from conversation
+    # Formatting for the Reviewer/Human
     formatted_content = f"SANDBOX_TEST_RESULTS:\n\n{raw_result}"
 
     print(f"\n[TEST RUNNER] Results captured ({len(raw_result)} chars)")
-    print(raw_result)
-    print('--- TEST RUNNER END ---')
     
-    # We return an AIMessage here because this node is "reporting" back to the graph
-    return {"messages": [AIMessage(content=formatted_content)],
-            "last_test_output": raw_result # Store it in state for the Human Node
+    if logger:
+        passed = raw_result.count(" PASSED")
+        failed = raw_result.count(" FAILED")
+        # Logic to determine status for the logger
+        status = "SUCCESS" if " PASSED" in raw_result and " FAILED" not in raw_result else "FAILURE"
+        logger.tool_execution("pytest", status, f"{passed} passed, {failed} failed")
+        logger.agent_end("test_runner", f"Execution finished with code {status}")
+    
+    return {
+        "messages": [AIMessage(content=formatted_content)],
+        "last_test_output": raw_result
     }
 
-def reviewer_node(state, llm, system_prompt, tools):
+def reviewer_node(state, llm, system_prompt, tools, logger=None):
     print("--- REVIEWER START ---")
+    
+    if logger:
+        logger.agent_start("reviewer")
 
     # 1. Extract context
     pytest_output = state["messages"][-1].content
@@ -251,6 +310,15 @@ def reviewer_node(state, llm, system_prompt, tools):
 
     print(f"Reviewer: Found {len(response_data.failures)} issues.")
     print("--- REVIEWER ENDS ---")
+    
+    # Log reviewer feedback
+    if logger:
+        logger.reviewer_feedback(
+            response_data.summary,
+            [f.dict() for f in response_data.failures],
+            response_data.developer_priority_instructions
+        )
+        logger.agent_end("reviewer", f"{len(response_data.failures)} issues found")
 
     return {
         "messages": [AIMessage(content=review_msg)],
@@ -262,7 +330,10 @@ def reviewer_node(state, llm, system_prompt, tools):
 
 from langchain_core.messages import HumanMessage
 
-def human_node(state):
+def human_node(state, logger=None):
+    if logger:
+        logger.agent_start("human_instructor")
+    
     print("\n" + "="*60)
     print("📋 RAW PYTEST LOG SNAPSHOT")
     print("="*60)
@@ -307,10 +378,18 @@ def human_node(state):
     user_input = input(">> ").strip()
     
     if user_input.upper() == "EXIT":
+        if logger:
+            logger.human_instruction("EXIT")
+            logger.agent_end("human_instructor", "Exit signal received")
         return {
             "messages": [HumanMessage(content="User requested exit and download.")],
             "human_instruction": "EXIT_SIGNAL" 
         }
+    
+    # Log human instruction
+    if logger:
+        logger.human_instruction(user_input)
+        logger.agent_end("human_instructor", "Instruction provided")
     
     # We clear active_failures so the next loop starts fresh
     return {

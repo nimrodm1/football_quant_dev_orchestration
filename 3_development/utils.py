@@ -82,7 +82,7 @@ for folder in ['src', 'tests', 'configs']:
     # 2. Map the .b64 files to local destinations
     sync_map = [
         ("src_export.b64", os.path.join(package_root, "src")),
-        ("tests_export.b64", os.path.join(package_root, "test")), 
+        ("tests_export.b64", os.path.join(package_root, "tests")), 
         ("configs_export.b64", os.path.join(orchestrator_root, "configs"))
     ]
 
