@@ -9,8 +9,12 @@ class SprintLogger:
     Logs to both console and file with timestamps.
     """
     
-    def __init__(self, stage: str, log_dir: str = "../logs"):
+    def __init__(self, stage: str, log_dir: str = None):
         self.stage = stage
+        # Use absolute path based on script location if log_dir not provided
+        if log_dir is None:
+            script_dir = Path(__file__).parent.parent  # Go up to ai_quant_orchestrator/
+            log_dir = script_dir / "logs"
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         

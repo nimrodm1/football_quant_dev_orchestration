@@ -33,7 +33,7 @@ def main(stage: str):
     print(f"🚀 Initialising FRESH Sprint Stage: {stage.upper()}")
     
     # 1.5 Initialize Logger
-    logger = SprintLogger(stage, log_dir="../logs")
+    logger = SprintLogger(stage)
     logger.sprint_start()
 
     # 2. Infrastructure: Sandbox & LLM

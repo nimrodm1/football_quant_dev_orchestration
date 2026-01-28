@@ -1,0 +1,9 @@
+strategy:
+  name: "kelly_optimal"
+  value_bet_threshold: 0.02
+  max_match_exposure: 0.05
+  kelly_fraction_k: 0.25
+  flat_stake_unit: 10.0
+  markets_to_monitor:
+    - "MATCH_ODDS"
+    - "OVER_UNDER_2_5"
