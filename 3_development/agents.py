@@ -225,36 +225,54 @@ def test_runner_node(state, llm, system_prompt, tools, logger=None):
     if logger:
         logger.agent_start("test_runner")
     
-    # 1. Use the dictionary key we defined in create_tools
     test_tool = tools.get('exec_python')
     
     if not test_tool:
         return {"messages": [HumanMessage(content="Error: exec_python tool not found.")]}
 
-    # 2. Run pytest inside the sandbox
-    pytest_script = "import sys; sys.path.insert(0, 'src'); import pytest; pytest.main(['-vv'])"
+    # IMPROVED SCRIPT: 
+    # 1. Resolves absolute paths to avoid CWD confusion.
+    # 2. Explicitly targets the 'tests' directory.
+    # 3. Captures the exit code for the Reviewer.
+    pytest_script = """
+import sys
+import os
+import pytest
+
+# Ensure the 'src' directory is in the path so 'import quant_football' works
+base_dir = os.getcwd()
+src_path = os.path.join(base_dir, 'src')
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+# Explicitly define the tests directory (outside src)
+tests_path = os.path.join(base_dir, 'tests')
+
+# Run pytest on the specific tests folder
+# We use a custom plugin or capture to ensure output is returned to the tool
+exit_code = pytest.main(['-vv', tests_path])
+
+print(f"\\nPytest exited with code: {exit_code}")
+"""
     
     raw_result = test_tool.invoke({"code": pytest_script})
 
-    # 3. Format the output so the Reviewer knows exactly what it's looking at
-    # We wrap it in a block to distinguish it from conversation
+    # Formatting for the Reviewer/Human
     formatted_content = f"SANDBOX_TEST_RESULTS:\n\n{raw_result}"
 
     print(f"\n[TEST RUNNER] Results captured ({len(raw_result)} chars)")
-    print(raw_result)
-    print('--- TEST RUNNER END ---')
     
-    # Log test execution
     if logger:
-        # Count pass/fail from raw output
         passed = raw_result.count(" PASSED")
         failed = raw_result.count(" FAILED")
-        logger.tool_execution("pytest", "COMPLETE", f"{passed} passed, {failed} failed")
-        logger.agent_end("test_runner", f"Tests run")
+        # Logic to determine status for the logger
+        status = "SUCCESS" if " PASSED" in raw_result and " FAILED" not in raw_result else "FAILURE"
+        logger.tool_execution("pytest", status, f"{passed} passed, {failed} failed")
+        logger.agent_end("test_runner", f"Execution finished with code {status}")
     
-    # We return an AIMessage here because this node is "reporting" back to the graph
-    return {"messages": [AIMessage(content=formatted_content)],
-            "last_test_output": raw_result # Store it in state for the Human Node
+    return {
+        "messages": [AIMessage(content=formatted_content)],
+        "last_test_output": raw_result
     }
 
 def reviewer_node(state, llm, system_prompt, tools, logger=None):

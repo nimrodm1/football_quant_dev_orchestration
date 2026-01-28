@@ -38,6 +38,16 @@ def main(stage: str):
 
     # 2. Infrastructure: Sandbox & LLM
     sandbox = Sandbox.create(timeout=3600)
+    install_cmd = (
+        "pip install --quiet "
+        "numpy==1.26.4 "       # The most stable 'LTS' version of NumPy 1.x
+        "pandas>=2.2.0 "
+        "xarray>=2024.1.0 "
+        "pymc>=5.16.2 "
+        "arviz>=0.18.0 "
+        "pytensor>=2.22.1"
+    )
+    sandbox.commands.run(install_cmd)
     
     # --- SYNC UP ---
     # Put your local 'src' and 'configs' into the empty sandbox
@@ -46,7 +56,7 @@ def main(stage: str):
     tools = create_tools(sandbox)
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
+        model="gemini-3-flash-preview", 
         google_api_key=os.getenv("GOOGLE_API_KEY"),
         temperature=0
     )
