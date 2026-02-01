@@ -20,7 +20,8 @@ The backtesting engine needs to simulate a real-world betting scenario, processi
 
 #### 2. File Structure and Class Responsibilities:
 
-The `backtesting` directory contains only one module: `backtester.py`. The strategy logic has been moved to the `strategy/` directory.
+The backtesting directory contains two modules: backtester.py (engine) and pipelines.py (infrastructure), while strategy logic is externalised in the strategy/ directory.
+Need to implement DataPipeline and ModelPipeline in pipelines.py
 
 *   **`backtesting/backtester.py`:**
     *   **`Backtester` Class:** The core engine for chronological backtesting.

@@ -22,7 +22,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 load_dotenv()
 
 ORCHESTRATOR_ROOT = "." 
-PACKAGE_ROOT = "../football_quant_package"
+PACKAGE_ROOT = "../football_quant_base"
 
 def main(stage: str):
     # 1. Validation & Prompt Loading
@@ -58,7 +58,8 @@ def main(stage: str):
     llm = ChatGoogleGenerativeAI(
         model="gemini-3-flash-preview", 
         google_api_key=os.getenv("GOOGLE_API_KEY"),
-        temperature=0
+        temperature=0,
+        timeout=30
     )
 
     stage_prompts = SPRINT_PROMPTS[stage]

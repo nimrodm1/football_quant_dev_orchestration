@@ -219,57 +219,89 @@ Your Task:
         "tool_loop_count": loop_count
     }
     
+from langchain_core.messages import AIMessage, HumanMessage
+import os
+
 def test_runner_node(state, llm, system_prompt, tools, logger=None):
-    print('--- TEST RUNNER START ---')
+    """
+    The 'Gatekeeper' node. Executes pytest in the E2B sandbox and 
+    reports results back to the Reviewer and Human Instructor.
+    """
+    print('\n--- 🔍 TEST RUNNER START ---')
     
     if logger:
         logger.agent_start("test_runner")
     
+    # 1. Retrieve the sandbox execution tool
     test_tool = tools.get('exec_python')
     
     if not test_tool:
-        return {"messages": [HumanMessage(content="Error: exec_python tool not found.")]}
+        error_msg = "Error: exec_python tool not found in toolset."
+        return {"messages": [HumanMessage(content=error_msg)]}
 
-    # IMPROVED SCRIPT: 
-    # 1. Resolves absolute paths to avoid CWD confusion.
-    # 2. Explicitly targets the 'tests' directory.
-    # 3. Captures the exit code for the Reviewer.
+    # 2. The Robust Pytest Script
+    # This script handles the 'src' layout and reports the exit code clearly.
     pytest_script = """
 import sys
 import os
 import pytest
 
-# Ensure the 'src' directory is in the path so 'import quant_football' works
-base_dir = os.getcwd()
+# A. Setup Absolute Paths
+base_dir = os.path.abspath(os.getcwd())
 src_path = os.path.join(base_dir, 'src')
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-
-# Explicitly define the tests directory (outside src)
 tests_path = os.path.join(base_dir, 'tests')
 
-# Run pytest on the specific tests folder
-# We use a custom plugin or capture to ensure output is returned to the tool
-exit_code = pytest.main(['-vv', tests_path])
+# B. Inject PYTHONPATH so pytest can see the 'src' package
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+os.environ["PYTHONPATH"] = f"{src_path}{os.pathsep}{os.environ.get('PYTHONPATH', '')}"
 
-print(f"\\nPytest exited with code: {exit_code}")
+# C. Run Pytest
+# --import-mode=importlib: Best for 'src' layouts
+# -vv: Maximum verbosity for the Reviewer
+try:
+    exit_code = pytest.main([
+        '-vv', 
+        '--import-mode=importlib', 
+        tests_path,
+        '-p', 'no:cacheprovider'
+    ])
+finally:
+    print(f"\\nPYTEST_EXIT_CODE: {exit_code}")
+    if exit_code == 5:
+        print("🚩 ALERT: No tests were collected. The Developer likely missed the naming convention or path.")
 """
-    
+
+    # 3. Invoke the Sandbox
     raw_result = test_tool.invoke({"code": pytest_script})
 
-    # Formatting for the Reviewer/Human
-    formatted_content = f"SANDBOX_TEST_RESULTS:\n\n{raw_result}"
+    # 4. Determine Status for Logging and Logic
+    # 0 = Success, 1 = Tests Failed, 2 = Interrupted, 5 = No Tests Found
+    if "PYTEST_EXIT_CODE: 0" in raw_result:
+        status = "SUCCESS"
+        status_emoji = "✅"
+    elif "PYTEST_EXIT_CODE: 5" in raw_result:
+        status = "EMPTY (GHOST RUN)"
+        status_emoji = "👻"
+    else:
+        status = "FAILURE"
+        status_emoji = "❌"
 
-    print(f"\n[TEST RUNNER] Results captured ({len(raw_result)} chars)")
+    # 5. Format output for the next node (Reviewer)
+    formatted_content = f"### {status_emoji} SANDBOX TEST RESULTS ({status})\n\n{raw_result}"
+    
+    print(f"[TEST RUNNER] Result: {status} ({len(raw_result)} chars captured)")
+    print('--- 🔍 TEST RUNNER END ---\n')
     
     if logger:
+        # Simple parsing for the summary log
         passed = raw_result.count(" PASSED")
         failed = raw_result.count(" FAILED")
-        # Logic to determine status for the logger
-        status = "SUCCESS" if " PASSED" in raw_result and " FAILED" not in raw_result else "FAILURE"
-        logger.tool_execution("pytest", status, f"{passed} passed, {failed} failed")
-        logger.agent_end("test_runner", f"Execution finished with code {status}")
+        summary = f"{passed} passed, {failed} failed"
+        logger.tool_execution("pytest", status, summary)
+        logger.agent_end("test_runner", f"Finished with status: {status}")
     
+    # We store last_test_output in the state so the Human can debug directly
     return {
         "messages": [AIMessage(content=formatted_content)],
         "last_test_output": raw_result

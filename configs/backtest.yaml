@@ -1,0 +1,13 @@
+backtesting:
+  initial_bankroll: 1000.0
+  training_window_months: 24
+  min_training_data_points: 100
+  retrain_frequency: 7
+  default_odds_provider_pre_match: "Avg"
+  default_odds_provider_close: "PS"
+  eval_metrics:
+    - "roi"
+    - "pnl"
+    - "brier_score"
+    - "log_loss"
+    - "clv_score"

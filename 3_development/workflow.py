@@ -1,116 +1,91 @@
-from state import AgentState
+from typing import Literal
 from langgraph.graph import StateGraph, END
- 
 from langgraph.prebuilt import ToolNode
+from state import AgentState
+
+# --- 1. Router Functions ---
 
 def architect_condition(state):
     last_message = state["messages"][-1].content
     if last_message.startswith("Stop:"):
-        return END  # Kill the workflow immediately
+        return END
     return "tester"
-
-def test_runner_condition(state):
-    last_message = state["messages"][-1].content
-    
-    # We add signals for when pytest finds nothing to do
-    stop_signals = [
-        "FAILED", 
-        "ERROR", 
-        "ImportError", 
-        "SyntaxError", 
-        "Interrupted",
-        "collected 0 items",      # NEW: Captures empty test collection
-        "no tests ran"            # NEW: Captures the final pytest summary line
-    ]
-    
-    if any(signal in last_message for signal in stop_signals):
-        print("🚩 Error detected (or no tests found). Routing to Reviewer.")
-        return "reviewer"
-        
-    return "end"
-
-
-from typing import Literal
 
 def should_continue(state) -> Literal["tools", "test_runner"]:
     messages = state["messages"]
     last_message = messages[-1]
     loop_count = state.get("tool_loop_count", 0)
     
-    # If the LLM made a tool call AND we are under the limit
     if last_message.tool_calls and loop_count < 5:
         return "tools"
     
-    # Circuit Breaker: If we've looped 5+ times, force a handover
-    if last_message.tool_calls and loop_count >= 5:
-        print(f"⚠️ Max iterations ({loop_count}) reached. Forcing handover.")
-        return "test_runner"
-    
-    # Otherwise, the Developer finished normally
+    # Handover to official test runner after tools or if limit reached
     return "test_runner"
 
-
 def human_router(state: AgentState):
-    # Check if the user typed 'EXIT'
-    if state.get("human_instruction") == "EXIT_SIGNAL":
-        print("👋 User requested termination. Syncing files and closing...")
+    """
+    The Master Gatekeeper. 
+    Only the Human Instructor can decide to finish the sprint.
+    """
+    # Check the state for your instruction
+    instruction = state.get("human_instruction", "").upper()
+    
+    if "EXIT" in instruction or "DONE" in instruction or "FINISH" in instruction:
+        print("🏁 Human validated the work. Closing Sprint...")
         return END
     
-    # Otherwise, send the human's instructions directly to the Developer
+    # Default: Send your feedback back to the developer to iterate
+    print("🔄 Sending human feedback to Developer for iteration.")
     return "developer"
 
+# --- 2. Main Workflow Construction ---
 
 def run_workflow(architect_node, tester_node, developer_node, test_runner_node, reviewer_node, human_node, tools):
     workflow = StateGraph(AgentState)
 
-    # 1. Add all nodes (including the new Tools node)
+    # Add Nodes
     workflow.add_node("architect", architect_node)
     workflow.add_node("tester", tester_node)
     workflow.add_node("developer", developer_node)
-    workflow.add_node("tools", ToolNode(list(tools.values()))) # NEW: The Sandbox Executor
+    workflow.add_node("tools", ToolNode(list(tools.values())))
     workflow.add_node("test_runner", test_runner_node)
     workflow.add_node("reviewer", reviewer_node)
     workflow.add_node("human_instructor", human_node)
 
+    # Define the Flow
     workflow.set_entry_point("architect")
 
-    # 2. Existing start of flow
+    # A. Architect -> Tester -> Developer
     workflow.add_conditional_edges("architect", architect_condition, {END: END, "tester": "tester"})
     workflow.add_edge("tester", "developer")
 
-    # 3. NEW: The Developer's Internal Loop
-    # Instead of going straight to test_runner, we check if the developer wants to use tools
+    # B. The Developer Tool Loop
     workflow.add_conditional_edges(
         "developer",
-        should_continue, # This function checks for tool_calls
+        should_continue,
         {
-            "tools": "tools",            # Loop to E2B Sandbox
-            "test_runner": "test_runner" # No more tool calls? Go to official testing
+            "tools": "tools",
+            "test_runner": "test_runner"
         }
     )
-
-    # After tools run, they MUST go back to the developer to process the result
     workflow.add_edge("tools", "developer")
 
-    # 4. Official Validation Gate
+    # C. The Validation Chain
+    # We force test_runner results to go to the Reviewer for analysis
+    workflow.add_edge("test_runner", "reviewer")
+    
+    # D. The Analysis Chain
+    # The Reviewer provides thoughts, then passes the 'file' to you
+    workflow.add_edge("reviewer", "human_instructor")
+
+    # E. The Final Decision (Human Only)
     workflow.add_conditional_edges(
-        "test_runner",
-        test_runner_condition,
+        "human_instructor", 
+        human_router,
         {
-            "reviewer": "reviewer",
-            "end": END
+            "developer": "developer",
+            END: END
         }
     )
-
-    # 5. The Fix Loop (Human-in-the-loop)
-    workflow.add_edge("reviewer", "human_instructor")
-    workflow.add_conditional_edges(
-    "human_instructor", 
-    human_router,
-    {
-        "developer": "developer",
-        END: END
-    }
-)
 
     return workflow.compile()
