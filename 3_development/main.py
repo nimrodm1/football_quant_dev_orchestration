@@ -22,7 +22,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 load_dotenv()
 
 ORCHESTRATOR_ROOT = "." 
-PACKAGE_ROOT = "../football_quant_package"
+PACKAGE_ROOT = "../football_quant_base"
 
 def main(stage: str):
     # 1. Validation & Prompt Loading
