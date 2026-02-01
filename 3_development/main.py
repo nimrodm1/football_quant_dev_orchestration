@@ -58,7 +58,8 @@ def main(stage: str):
     llm = ChatGoogleGenerativeAI(
         model="gemini-3-flash-preview", 
         google_api_key=os.getenv("GOOGLE_API_KEY"),
-        temperature=0
+        temperature=0,
+        timeout=30
     )
 
     stage_prompts = SPRINT_PROMPTS[stage]
