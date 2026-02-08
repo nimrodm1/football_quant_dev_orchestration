@@ -1,0 +1,3 @@
+### Practical Application: Football Quant Base
+
+This workflow was used to build [football_quant_base](https://github.com/nimrodm1/football_quant_base), an end-to-end framework for Bayesian football modelling, betting strategy evaluation, and historical backtesting. The project was structured into five distinct development sprints—Data, Features, Modelling, Strategy, and Backtesting—with the agents providing the initial scaffolding for each module. The agents handled the standard implementation patterns (roughly 80% of the code) while I focused on finalising the code and the technical connectivity between modules. For example, ensuring a robust handshake between the Bayesian model outputs and the staking logic.
